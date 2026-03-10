@@ -42,3 +42,52 @@ LEARNING_RATE = 0.001
 EPOCHS = 10
 HIDDEN_UNITS = [128, 64, 32]
 DROPOUT_RATE = 0.3
+
+# ============================================================
+# Kaggle Playground Series S6E3 - Telecom Churn
+# ============================================================
+
+# Kaggle Datasets
+KAGGLE_TRAIN_PATH = os.path.join(DATA_DIR, 'train.csv')
+KAGGLE_TEST_PATH = os.path.join(DATA_DIR, 'test.csv')
+KAGGLE_SAMPLE_SUB_PATH = os.path.join(DATA_DIR, 'sample_submission.csv')
+
+# Kaggle Feature Definitions
+KAGGLE_ID_COL = 'id'
+KAGGLE_TARGET_COL = 'Churn'
+
+KAGGLE_NUMERICAL_COLS = [
+    'tenure',
+    'SeniorCitizen',
+    'MonthlyCharges',
+    'TotalCharges',
+]
+
+KAGGLE_CATEGORICAL_COLS = [
+    'gender',
+    'Partner',
+    'Dependents',
+    'PhoneService',
+    'MultipleLines',
+    'InternetService',
+    'OnlineSecurity',
+    'OnlineBackup',
+    'DeviceProtection',
+    'TechSupport',
+    'StreamingTV',
+    'StreamingMovies',
+    'Contract',
+    'PaperlessBilling',
+    'PaymentMethod',
+]
+
+# Kaggle Neural Network Hyperparameters
+KAGGLE_BATCH_SIZE = 256
+KAGGLE_LEARNING_RATE = 0.001
+KAGGLE_EPOCHS = 15
+KAGGLE_HIDDEN_UNITS = [256, 128, 64]
+KAGGLE_DROPOUT_RATE = 0.3
+
+# Cross-validation
+KAGGLE_N_FOLDS = 5
+KAGGLE_RANDOM_STATE = 42

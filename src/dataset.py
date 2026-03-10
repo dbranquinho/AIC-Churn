@@ -150,3 +150,86 @@ def get_dataloader(X, y, batch_size, shuffle):
     """
     dataset = ChurnDataset(X, y)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+
+
+# ============================================================
+# Kaggle Playground Series S6E3 - Telecom Churn
+# ============================================================
+
+class KaggleDataProcessor:
+    """Preprocessor for the Kaggle telecom churn dataset."""
+    
+    def __init__(self):
+        self.preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), config.KAGGLE_NUMERICAL_COLS),
+                ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), config.KAGGLE_CATEGORICAL_COLS)
+            ]
+        )
+        self.is_fitted = False
+
+    def fit_transform(self, df):
+        df = self._clean_data(df)
+        X_processed = self.preprocessor.fit_transform(df)
+        self.is_fitted = True
+        return X_processed
+
+    def transform(self, df):
+        if not self.is_fitted:
+            raise ValueError("Processor must be fitted before calling transform().")
+        df = self._clean_data(df)
+        return self.preprocessor.transform(df)
+
+    def _clean_data(self, df):
+        df_clean = df.copy()
+        # Drop id column
+        if config.KAGGLE_ID_COL in df_clean.columns:
+            df_clean = df_clean.drop(columns=[config.KAGGLE_ID_COL])
+        # Drop target column if present (we extract it separately)
+        if config.KAGGLE_TARGET_COL in df_clean.columns:
+            df_clean = df_clean.drop(columns=[config.KAGGLE_TARGET_COL])
+        return df_clean
+
+    def get_feature_dim(self):
+        if not self.is_fitted:
+            raise ValueError("Must fit before retrieving dimension.")
+        num_dim = len(config.KAGGLE_NUMERICAL_COLS)
+        ohe = self.preprocessor.named_transformers_['cat']
+        cat_dim = sum(len(cats) for cats in ohe.categories_)
+        return num_dim + cat_dim
+
+    def save(self, path):
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path):
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+
+
+def kaggle_load_data(filepath, fit_processor=False, processor=None):
+    """
+    Loads Kaggle telecom churn data. 
+    Encodes target: 'Yes' -> 1, 'No' -> 0.
+    Returns (X, y, processor) if fit_processor=True, else (X, y, ids).
+    """
+    print(f"Loading Kaggle data from {filepath}...")
+    df = pd.read_csv(filepath)
+    
+    # Preserve ids for submission
+    ids = df[config.KAGGLE_ID_COL].values if config.KAGGLE_ID_COL in df.columns else None
+    
+    # Encode target
+    if config.KAGGLE_TARGET_COL in df.columns:
+        y = df[config.KAGGLE_TARGET_COL].map({'Yes': 1, 'No': 0}).values
+    else:
+        y = None
+
+    if fit_processor:
+        processor = KaggleDataProcessor()
+        X = processor.fit_transform(df)
+        return X, y, processor
+    else:
+        X = processor.transform(df)
+        return X, y, ids
