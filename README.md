@@ -1,166 +1,74 @@
-# Customer Churn Prediction — Multi-Model AI Pipeline
+# Customer Churn Prediction — Kaggle S6E3 Advanced XGBoost Pipeline
 
 <hr>
 
-![](https://img.shields.io/badge/python-3.12-lightblue) ![](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat&logo=pytorch&logoColor=white) ![](https://img.shields.io/badge/TensorFlow-FF6F00?style=flat&logo=tensorflow&logoColor=white) ![](https://img.shields.io/badge/XGBoost-189FDD?style=flat) ![](https://img.shields.io/badge/LightGBM-02569B?style=flat) ![](https://img.shields.io/badge/CatBoost-FFCD00?style=flat) ![](https://img.shields.io/badge/Licence-MIT-lightgray) ![](https://img.shields.io/badge/status-Release-darkgreen)
+![](https://img.shields.io/badge/python-3.12-lightblue) ![](https://img.shields.io/badge/XGBoost-189FDD?style=flat) ![](https://img.shields.io/badge/Optuna-20232A?style=flat) ![](https://img.shields.io/badge/Scikit--Learn-F7931E?style=flat) ![](https://img.shields.io/badge/Licence-MIT-lightgray) ![](https://img.shields.io/badge/status-Release-darkgreen)
 
-A production-ready churn prediction system that compares **6 algorithms** (2 deep learning + 3 gradient boosters + 1 ensemble), includes a **deep diagnostic evaluation suite** with 13+ advanced metrics, and provides mathematical proof of dataset shift via adversarial validation and per-feature PSI analysis.
+A highly optimized machine learning pipeline developed to tackle the **[Kaggle Playground Series S6E3 Telecom Churn Dataset](https://www.kaggle.com/competitions/playground-series-s6e3)**.
 
-## Technology Stack
+Our final solution relies on an **Extreme XGBoost v3 Architecture** that utilizes advanced feature engineering, $K$-Means clustering, smoothed Out-Of-Fold (OOF) target encoding, and rigorous Optuna hyperparameter tuning to achieve exceptional ROC-AUC scores ($~0.916+$).
 
-| Category | Technologies |
-|---|---|
-| **Deep Learning** | [PyTorch](https://pytorch.org/) (MLP), [TensorFlow/Keras](https://www.tensorflow.org/) (MLP) |
-| **Gradient Boosting** | [XGBoost](https://xgboost.readthedocs.io/), [LightGBM](https://lightgbm.readthedocs.io/), [CatBoost](https://catboost.ai/) |
-| **Preprocessing** | [Scikit-Learn](https://scikit-learn.org/) (`StandardScaler`, `OneHotEncoder`, `ColumnTransformer`) |
-| **Data** | [Pandas](https://pandas.pydata.org/), [NumPy](https://numpy.org/) |
-| **Visualization** | [Matplotlib](https://matplotlib.org/), [Seaborn](https://seaborn.pydata.org/) |
+## Advanced Feature Engineering (The v3 Edge)
+
+To extract maximum signal from the categorical and continuous variables, the pipeline (`src/kaggle_train.py`) automatically generates powerful synthetic features:
+
+1. **Financial Ratios:** Ratios like `MonthlyCharges / TotalCharges`, `tenure / MonthlyCharges`, and the percentage discrepancy between actual vs. expected total charges.
+2. **K-Means Financial Clustering:** Clusters the customer base ($k=8$) dynamically based on their financial profiles, providing XGBoost with explicit boundaries to optimize leaf splits.
+3. **Smoothed Target Encoding (OOF):** Applies heavily regularized, noise-injected Out-Of-Fold target encoding to high-cardinality features to prevent data leakage while capturing the historical average churn rates.
+4. **Feature Crosses & Binning:** Interaction terms (e.g. `Contract + PaymentMethod`), frequency counts, and discrete quantile binning for continuous features.
+
+## Ultimate 5-Fold Ensembling
+
+Rather than relying on a single model, the script implements a **5-Fold Stratified Ensembling strategy**. It trains 5 separate, heavily-tuned XGBoost models on different subsets of the data and averages their final predictions. This drastically reduces model variance and prevents overfitting to the public leaderboard.
 
 ## Project Structure
 
 ```text
 AIC-Churn/
 ├── data/
-│   ├── customer_churn_dataset-training-master.csv   # ~440K training records
-│   └── customer_churn_dataset-testing-master.csv     # ~64K testing records
-├── models/                          # Saved trained models & processors
-│   ├── churn_model.pth              # PyTorch MLP weights
-│   ├── tf_churn_model.keras         # TensorFlow/Keras model
-│   ├── xgb_model.json               # XGBoost model
-│   ├── lgb_model.txt                # LightGBM model
-│   ├── cat_model.cbm                # CatBoost model
-│   └── *.pkl                        # Fitted preprocessor pipelines
-├── assets/                          # Generated diagnostic plots
-│   ├── confusion_matrix.png
-│   ├── roc_curve.png                # Comparative ROC (PyTorch vs TF)
-│   ├── pr_curve.png                 # Comparative PR curve
-│   ├── calibration_and_confidence.png   # Calibration + confidence histogram
-│   ├── ks_gains_lift.png            # KS, Cumulative Gains, Lift (all models)
-│   ├── psi_distribution_shift.png   # Per-feature train/test distributions
-│   └── dca_youden.png              # Decision Curve Analysis + Youden's J
+│   ├── train.csv                    # Kaggle S6E3 training data (594k rows)
+│   ├── test.csv                     # Kaggle S6E3 test data (254k rows)
+│   └── sample_submission.csv
+├── models/
+│   ├── kaggle/                      # Saved 5-Fold XGBoost JSON models
+│   └── plots/
+│       └── xgb_v3_feature_importance.png  # Automatically generated importance plot
 ├── src/
-│   ├── config.py                    # Hyperparameters and paths
-│   ├── dataset.py                   # Custom Dataset and DataProcessor
-│   ├── model.py                     # PyTorch MLP architecture
-│   ├── model_tf.py                  # TensorFlow/Keras MLP architecture
-│   ├── train.py                     # Train PyTorch MLP
-│   ├── train_tf.py                  # Train TensorFlow/Keras MLP
-│   ├── train_xgb.py                 # Train XGBoost
-│   ├── train_lgb.py                 # Train LightGBM
-│   ├── train_cat.py                 # Train CatBoost
-│   ├── evaluate.py                  # Evaluate PyTorch MLP
-│   ├── evaluate_tf.py               # Evaluate TensorFlow/Keras MLP
-│   ├── evaluate_xgb.py              # Evaluate XGBoost
-│   ├── evaluate_lgb.py              # Evaluate LightGBM
-│   ├── evaluate_cat.py              # Evaluate CatBoost
-│   ├── inference.py                 # Production inference on new data
-│   ├── report.py                    # Generate ROC/PR/Confusion plots
-│   ├── deep_evaluation.py           # Advanced 13+ metric diagnostic suite
-│   ├── adversarial_validation.py    # Dataset shift proof
-│   └── describe.py                  # Data exploration
-├── report.md                        # Full evaluation report
+│   ├── config.py                    # Hyperparameters and data paths
+│   ├── dataset.py                   # Data ingestion 
+│   └── kaggle_train.py              # The Ultimate v3 Training & Inference Pipeline
+├── submissions/
+│   └── submission_xgb_v3_ensemble.csv # Final predictions for Kaggle
+├── xgb_v3_report.md                 # Auto-generated performance report
 ├── requirements.txt
 └── README.md
 ```
 
-## Setup
+## Setup & Installation
+
+Ensure you have Python 3.12 installed.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Dependencies
+*(Note: The `kaggle_train.py` script requires a modern XGBoost version (>=2.0) with native categorical support and Optuna for hyperparameter tuning).*
 
-```
-torch, tensorflow, pandas, numpy, scikit-learn, tqdm, matplotlib, seaborn
-xgboost, lightgbm, catboost  (for gradient boosting models)
-```
+## How to Run the Pipeline
 
-## Usage
-
-### 1. Train Models
+The codebase has been refactored into a **single, unified command**. Running this script will automatically load the data, engineer the v3 features, execute an 80-trial Optuna optimization, perform 5-Fold Training, and generate your Kaggle submission CSV.
 
 ```bash
-# Deep Learning
-python -m src.train          # PyTorch MLP
-python -m src.train_tf       # TensorFlow/Keras MLP
-
-# Gradient Boosting
-python -m src.train_xgb      # XGBoost
-python -m src.train_lgb      # LightGBM
-python -m src.train_cat      # CatBoost
+python src/kaggle_train.py
 ```
 
-### 2. Evaluate Models
+### What the script executes sequentially:
 
-```bash
-python -m src.evaluate       # PyTorch MLP
-python -m src.evaluate_tf    # TensorFlow/Keras MLP
-python -m src.evaluate_xgb   # XGBoost
-python -m src.evaluate_lgb   # LightGBM
-python -m src.evaluate_cat   # CatBoost
-```
-
-### 3. Generate Visual Reports
-
-```bash
-python -m src.report         # Comparative ROC/PR/Confusion plots
-```
-
-### 4. Deep Diagnostic Evaluation (13+ Metrics)
-
-```bash
-python -m src.deep_evaluation
-```
-
-Runs all 5 models through 5 tiers of analysis:
-
-| Tier | Metrics | What It Reveals |
-|---|---|---|
-| **1. Statistical Robustness** | MCC, Cohen's Kappa, Log Loss, Brier Score | Whether model beats random chance |
-| **2. Probability Calibration** | Calibration Curve, ECE, Confidence Distribution | Whether predicted probabilities are meaningful |
-| **3. Discriminative Power** | KS Statistic, Gini, Cumulative Gains, Lift | Ranking quality and business utility |
-| **4. Distribution Shift** | PSI per feature, train vs. test density plots | Root cause of model failure |
-| **5. Decision-Theoretic** | Decision Curve Analysis, Youden's J | Optimal threshold and net benefit |
-
-### 5. Inference on New Data
-
-See `src/inference.py` for how to load and use the model in production with new, raw customer records.
-
-### 6. Adversarial Validation
-
-```bash
-python -m src.adversarial_validation
-```
-
-Mathematically proves whether training and testing datasets come from the same distribution.
-
-## Results Summary
-
-### Algorithm Shootout
-
-| Architecture | Paradigm | Train Accuracy | Test Accuracy |
-|:---|:---|:---:|:---:|
-| PyTorch MLP | Deep Learning | 99.98% | 51.58% |
-| TensorFlow/Keras MLP | Deep Learning | 98.74% | 51.60% |
-| Random Forest | Bagging | 99.90% | 51.00% |
-| XGBoost | Gradient Boosting | 99.98% | 50.35% |
-| LightGBM | Gradient Boosting | 99.98% | 50.34% |
-| CatBoost | Gradient Boosting | 99.99% | 50.34% |
-
-All models cap at ~50% test accuracy due to **Covariate Shift** — confirmed by adversarial validation (AUC = 0.76) and PSI analysis identifying `Support Calls` (PSI=0.38) and `Payment Delay` (PSI=0.30) as the root cause.
-
-### Key Advanced Metrics (All Models)
-
-| Metric | PyTorch | TF/Keras | XGBoost | LightGBM | CatBoost |
-|:---|:---:|:---:|:---:|:---:|:---:|
-| Accuracy | 0.5158 | 0.5160 | 0.5035 | 0.5034 | 0.5034 |
-| ROC AUC | 0.5973 | 0.5997 | **0.7446** | **0.7450** | 0.6306 |
-| MCC | 0.1904 | 0.1901 | 0.1625 | 0.1623 | 0.1623 |
-| KS Statistic | 0.1731 | 0.1789 | **0.3984** | **0.3987** | 0.2332 |
-| Gini | 0.1947 | 0.1993 | **0.4892** | **0.4900** | 0.2611 |
-
-> See [report.md](report.md) for the complete analysis with 13 metrics, 7 diagnostic plots, and strategic conclusions.
+1. **Data Preprocessing & Feature Engineering:** Applies KMeans, binning, and cross-features.
+2. **Phase 1 (Optuna Tuning):** Runs 80 fast trials on GPU (`device='cuda'`) sweeping massive search spaces, ensuring learning rates are bounded (`0.005` to `0.05`) for high precision.
+3. **Phase 2 (Ensembling):** Iterates through 5 Stratified Folds, applying **Smoothed OOF Target Encoding** per fold, and trains a highly robust XGBoost model (`num_boost_round=3500`).
+4. **Submission Generation:** Averages the probabilities across all 5 folds and outputs `submissions/submission_xgb_v3_ensemble.csv`.
+5. **Reporting:** Calculates overall OOF ROC-AUC, aggregates feature weights, saves the importance plot to `models/plots/`, and writes the `xgb_v3_report.md`.
 
 ## License
 
