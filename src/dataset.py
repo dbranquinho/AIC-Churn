@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import pickle
 from torch.utils.data import Dataset, DataLoader
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder
 from sklearn.compose import ColumnTransformer
 
 # Local Imports
@@ -39,7 +39,7 @@ class DataProcessor:
         self.preprocessor = ColumnTransformer(
             transformers=[
                 ('num', StandardScaler(), config.NUMERICAL_COLS),
-                ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), config.CATEGORICAL_COLS)
+                ('cat', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1), config.CATEGORICAL_COLS)
             ]
         )
         self.is_fitted = False
@@ -97,9 +97,8 @@ class DataProcessor:
         # Scaler outputs the same number as numerical cols
         num_dim = len(config.NUMERICAL_COLS)
         
-        # Extract the fitted OneHotEncoder
-        ohe = self.preprocessor.named_transformers_['cat']
-        cat_dim = sum(len(cats) for cats in ohe.categories_)
+        # OrdinalEncoder outputs exactly same number of cols as input config.CATEGORICAL_COLS
+        cat_dim = len(config.CATEGORICAL_COLS)
         
         return num_dim + cat_dim
     
@@ -163,7 +162,7 @@ class KaggleDataProcessor:
         self.preprocessor = ColumnTransformer(
             transformers=[
                 ('num', StandardScaler(), config.KAGGLE_NUMERICAL_COLS),
-                ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), config.KAGGLE_CATEGORICAL_COLS)
+                ('cat', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1), config.KAGGLE_CATEGORICAL_COLS)
             ]
         )
         self.is_fitted = False
@@ -194,8 +193,8 @@ class KaggleDataProcessor:
         if not self.is_fitted:
             raise ValueError("Must fit before retrieving dimension.")
         num_dim = len(config.KAGGLE_NUMERICAL_COLS)
-        ohe = self.preprocessor.named_transformers_['cat']
-        cat_dim = sum(len(cats) for cats in ohe.categories_)
+        # OrdinalEncoder outputs exactly same number of cols as input config.KAGGLE_CATEGORICAL_COLS
+        cat_dim = len(config.KAGGLE_CATEGORICAL_COLS)
         return num_dim + cat_dim
 
     def save(self, path):
