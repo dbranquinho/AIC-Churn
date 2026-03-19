@@ -1,7 +1,7 @@
 """
-Kaggle Playground Series S6E3 — V6 Deep Evaluation (Back to Basics)
-Stripped of noisy computational features. Relies purely on Native Categorical parsing 
-alongside a deep Optuna optimization across 3 distinct GBDT architectures.
+Kaggle Playground Series S6E3 — V7 Optimized Ensemble
+Integrates pure native categorical parsing, robust continuous financial features,
+and mathematically optimized blending weights to maximize ROC-AUC.
 """
 import os
 import numpy as np
@@ -50,7 +50,12 @@ def feature_engineering(train_df, test_df):
     # 2. Fix empty numerics
     df_all['TotalCharges'] = pd.to_numeric(df_all['TotalCharges'], errors='coerce').fillna(0)
     
-    # *WE DELIBERATELY DROP ALL "DISCREPANCY", "RATIO", OR "KMEANS" FEATURES HERE*
+    # V7 Financial Features
+    df_all['avg_charge_per_tenure'] = df_all['TotalCharges'] / (df_all['tenure'] + 1)
+    df_all['charge_discrepancy'] = df_all['TotalCharges'] - (df_all['MonthlyCharges'] * df_all['tenure'])
+    df_all['pct_discrepancy'] = df_all['charge_discrepancy'] / (df_all['TotalCharges'] + 1)
+    df_all['monthly_over_total'] = df_all['MonthlyCharges'] / (df_all['TotalCharges'] + 1)
+    df_all['tenure_over_monthly'] = df_all['tenure'] / (df_all['MonthlyCharges'] + 1)
     
     # 3. Categorical Processing - pure native casting
     for col in cat_cols:
@@ -218,35 +223,50 @@ def main():
         oof_cat[val_idx] = model_cat.predict_proba(valid_pool)[:, 1]
         preds_cat += model_cat.predict_proba(test_pool)[:, 1] / NUM_FOLDS
         
+    from scipy.optimize import minimize
     print("\n" + "="*60)
     print(f"  Tuned XGBoost  AUC : {roc_auc_score(y, oof_xgb):.5f}")
     print(f"  Tuned LightGBM AUC : {roc_auc_score(y, oof_lgb):.5f}")
     print(f"  Tuned CatBoost AUC : {roc_auc_score(y, oof_cat):.5f}")
     
-    oof_ensemble = (oof_xgb + oof_lgb + oof_cat) / 3
+    print("\n  Optimizing Ensemble Weights...")
+    def obj_func(weights):
+        w_xgb, w_lgb, w_cat = weights
+        blend = w_xgb * oof_xgb + w_lgb * oof_lgb + w_cat * oof_cat
+        return -roc_auc_score(y, blend)
+        
+    res = minimize(obj_func, [1/3, 1/3, 1/3], method='Nelder-Mead')
+    best_weights = res.x
+    best_weights /= np.sum(best_weights) # normalize
+    
+    oof_ensemble = best_weights[0]*oof_xgb + best_weights[1]*oof_lgb + best_weights[2]*oof_cat
     final_auc = roc_auc_score(y, oof_ensemble)
-    print(f"\n  Final V6 Tri-Ensemble OOF AUC: {final_auc:.5f} !!!")
+    print(f"\n  Final V7 Optimized Ensemble OOF AUC: {final_auc:.5f} !!!")
+    print(f"  Weights -> XGB: {best_weights[0]:.4f}, LGB: {best_weights[1]:.4f}, CAT: {best_weights[2]:.4f}")
     print("="*60)
     
-    sub_prob = pd.DataFrame({'id': test_ids, 'Churn': (preds_xgb + preds_lgb + preds_cat) / 3})
-    sub_prob_path = os.path.join(SUBMISSION_DIR, 'submission_v6_ensemble.csv')
+    final_test_preds = best_weights[0]*preds_xgb + best_weights[1]*preds_lgb + best_weights[2]*preds_cat
+    sub_prob = pd.DataFrame({'id': test_ids, 'Churn': final_test_preds})
+    sub_prob_path = os.path.join(SUBMISSION_DIR, 'submission_v7_optimized.csv')
     sub_prob.to_csv(sub_prob_path, index=False)
     
-    report_content = f"""# V6 Deep Tuning Ensemble (Back to Basics) Report
+    report_content = f"""# V7 Optimized Ensemble Report
 
 ## Strategy
-1. **Clean Features**: Dropped completely all financial ratio math, forcing trees to evaluate purely raw signals without confusion.
-2. **Deep Tuning**: Unleashed a dedicated 30-trial Optuna study specifically matching hyperparameters for each model independently.
+1. **Financial Features**: Re-added avg_charge_per_tenure, discrepancies, cross ratios based on v3 success.
+2. **Deep Tuning**: Dedicated 30-trial Optuna study matching hyperparameters specifically for each model independently.
+3. **Optimized Ensembling**: Utilized Nelder-Mead optimization to find the exact blend weights `(XGB, LGB, CAT)`.
     
 ## Final Performance
 - **Tuned XGBoost AUC**: {roc_auc_score(y, oof_xgb):.5f}
 - **Tuned LightGBM AUC**: {roc_auc_score(y, oof_lgb):.5f}
 - **Tuned CatBoost AUC**: {roc_auc_score(y, oof_cat):.5f}
-- **Final Blended Ensemble OOF AUC**: **{final_auc:.5f}**
+- **Optimized Blend Weights**: XGB: {best_weights[0]:.4f}, LGB: {best_weights[1]:.4f}, CAT: {best_weights[2]:.4f}
+- **Final Optimized Ensemble OOF AUC**: **{final_auc:.5f}**
 """
-    with open(os.path.join(config.BASE_DIR, 'xgb_v6_report.md'), 'w') as f:
+    with open(os.path.join(config.BASE_DIR, 'xgb_v7_report.md'), 'w') as f:
         f.write(report_content)
-    print("\nDONE! Report saved to xgb_v6_report.md.")
+    print("\nDONE! Report saved to xgb_v7_report.md.")
 
 if __name__ == "__main__":
     main()
