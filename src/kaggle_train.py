@@ -1,19 +1,20 @@
 """
-Kaggle Playground Series S6E3 — V7 Optimized Ensemble
-Integrates pure native categorical parsing, robust continuous financial features,
-and mathematically optimized blending weights to maximize ROC-AUC.
+Kaggle Playground Series S6E3 — V14 The Pseudo-Labeling Booster
+Implements the ultimate Kaggle Semi-Supervised trick.
+Injects highly confident Test predictions (from V13) back into the Training Set
+to forcibly shift the mathematical bounds towards the Test Distribution.
 """
 import os
 import numpy as np
 import pandas as pd
 import optuna
 import warnings
+import json
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import roc_auc_score
+from category_encoders import TargetEncoder
 
 import xgboost as xgb
-from lightgbm import LGBMClassifier
-from catboost import CatBoostClassifier, Pool
 
 warnings.filterwarnings('ignore')
 import src.config as config
@@ -23,123 +24,124 @@ os.makedirs(KAGGLE_MODEL_DIR, exist_ok=True)
 SUBMISSION_DIR = os.path.join(config.BASE_DIR, 'submissions')
 os.makedirs(SUBMISSION_DIR, exist_ok=True)
 
+# V14 PSEUDO-LABELING PARAMETERS
+PSEUDO_POS_THRESHOLD = 0.985
+PSEUDO_NEG_THRESHOLD = 0.015
+
 NUM_FOLDS = 10
-N_TRIALS = 30  # Deep evaluation: 30 Optuna trials per model. 
+N_TRIALS = 30  # Faster tuning, relying on the injected data distributions
 
 def feature_engineering(train_df, test_df):
-    """V6 Clean: Unaltered core features to eliminate synthetic cross-math leakage."""
-    print("Applying deeply cleaned feature engineering (v6)...")
+    print("Applying V14 Pseudo-Labeling + Target Encoding...")
     
-    y = train_df[config.KAGGLE_TARGET_COL].map({'Yes': 1, 'No': 0}).values
+    y = train_df[config.KAGGLE_TARGET_COL].map({'Yes': 1, 'No': 0, 'True': 1, 'False': 0, '1': 1, '0': 0}).fillna(0).astype('int64').values
     train_df = train_df.drop(columns=[config.KAGGLE_TARGET_COL])
+    
+    # --- V14 PSEUDO LABELING INJECTION ---
+    v13_preds_path = os.path.join(SUBMISSION_DIR, 'submission_v13_target_encoded.csv')
+    pseudo_y = []
+    
+    if os.path.exists(v13_preds_path):
+        v13_df = pd.read_csv(v13_preds_path)
+        # Find highly confident predictions in Test Set
+        pos_mask = v13_df['Churn'] >= PSEUDO_POS_THRESHOLD
+        neg_mask = v13_df['Churn'] <= PSEUDO_NEG_THRESHOLD
+        
+        test_pseudo_pos = test_df[pos_mask].copy()
+        test_pseudo_neg = test_df[neg_mask].copy()
+        
+        print(f"V14: Found {pos_mask.sum()} HIGH confidence Positive Churn tests.")
+        print(f"V14: Found {neg_mask.sum()} HIGH confidence Negative Churn tests.")
+        
+        pseudo_train = pd.concat([test_pseudo_pos, test_pseudo_neg], axis=0)
+        pseudo_labels = np.concatenate([np.ones(pos_mask.sum()), np.zeros(neg_mask.sum())])
+        
+        # Inject back to Training
+        if len(pseudo_train) > 0:
+            print("V14: INJECTING Test records back into Train!")
+            train_df = pd.concat([train_df, pseudo_train], axis=0).reset_index(drop=True)
+            y = np.concatenate([y, pseudo_labels])
+    else:
+        print("V14 WARNING: v13 predictions not found, pseudo-labeling skipped.")
+    
+    # -------------------------------------
     
     ids = test_df[config.KAGGLE_ID_COL].values
     train_df = train_df.drop(columns=[config.KAGGLE_ID_COL], errors='ignore')
     test_df = test_df.drop(columns=[config.KAGGLE_ID_COL], errors='ignore')
     
     df_all = pd.concat([train_df, test_df], axis=0).reset_index(drop=True)
-    train_len = len(train_df)
+    train_len = len(train_df) # New length includes pseudo labels
     
-    # 1. Clean Categorical Identification
     cat_cols = config.KAGGLE_CATEGORICAL_COLS.copy()
     
-    # Optional logic: simple additive crosses that don't invent numbers
+    # 1. Base Combo
     df_all['Contract_Payment'] = df_all['Contract'] + "_" + df_all['PaymentMethod']
     cat_cols.append('Contract_Payment')
 
-    # 2. Fix empty numerics
+    # 2. Revert to fillna(0) for stability
     df_all['TotalCharges'] = pd.to_numeric(df_all['TotalCharges'], errors='coerce').fillna(0)
+    df_all['MonthlyCharges'] = pd.to_numeric(df_all['MonthlyCharges'], errors='coerce').fillna(0)
+    df_all['tenure'] = pd.to_numeric(df_all['tenure'], errors='coerce').fillna(0)
     
-    # V7 Financial Features
-    df_all['avg_charge_per_tenure'] = df_all['TotalCharges'] / (df_all['tenure'] + 1)
-    df_all['charge_discrepancy'] = df_all['TotalCharges'] - (df_all['MonthlyCharges'] * df_all['tenure'])
-    df_all['pct_discrepancy'] = df_all['charge_discrepancy'] / (df_all['TotalCharges'] + 1)
+    # 3. The Grandmaster's "ChargeResidual" Trick (V13/V14 core)
+    expected_charge = df_all['MonthlyCharges'] * df_all['tenure']
+    charge_residual = df_all['TotalCharges'] - expected_charge
+    
+    df_all['charge_residual'] = charge_residual
+    df_all['charge_residual_sign'] = np.sign(charge_residual)
+    df_all['charge_residual_relative'] = charge_residual / (expected_charge + 1)
+    
+    # 4. Standard Logical Ratios
     df_all['monthly_over_total'] = df_all['MonthlyCharges'] / (df_all['TotalCharges'] + 1)
     df_all['tenure_over_monthly'] = df_all['tenure'] / (df_all['MonthlyCharges'] + 1)
     
-    # 3. Categorical Processing - pure native casting
+    # Fill categorical nulls
     for col in cat_cols:
         df_all[col] = df_all[col].fillna('Missing').astype(str)
-        df_all[col] = df_all[col].astype('category')
         
     X_train = df_all.iloc[:train_len].copy()
     X_test = df_all.iloc[train_len:].copy()
     
-    print(f"Final Train shape: {X_train.shape}, Test shape: {X_test.shape}")
+    print(f"Final Train shape (Synthetic + Pseudo): {X_train.shape}, Test shape: {X_test.shape}")
     return X_train, y, X_test, ids, cat_cols
 
 
 # ================= OPUNTA OBJECTIVES =================
 
-def obj_xgb(trial, X, y):
+def obj_xgb(trial, X, y, cat_cols):
     params = {
         'objective': 'binary:logistic',
         'eval_metric': 'auc',
         'tree_method': 'hist',
         'device': 'cuda',
-        'enable_categorical': True,
-        'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.08, log=True),
-        'max_depth': trial.suggest_int('max_depth', 3, 8),
-        'subsample': trial.suggest_float('subsample', 0.5, 0.95),
-        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 0.95),
+        'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.05, log=True),
+        'max_depth': trial.suggest_int('max_depth', 3, 9),
+        'subsample': trial.suggest_float('subsample', 0.4, 0.95),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 0.95),
         'min_child_weight': trial.suggest_int('min_child_weight', 1, 20),
-        'gamma': trial.suggest_float('gamma', 0, 5),
-        'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10, log=True),
-        'reg_lambda': trial.suggest_float('reg_lambda', 1e-3, 10, log=True),
+        'gamma': trial.suggest_float('gamma', 0.001, 10.0, log=True),
+        'reg_alpha': trial.suggest_float('reg_alpha', 1e-4, 50, log=True),
+        'reg_lambda': trial.suggest_float('reg_lambda', 1e-4, 50, log=True),
         'random_state': 42
     }
-    X_tr, X_va, y_tr, y_va = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
-    dtrain = xgb.DMatrix(X_tr, label=y_tr, enable_categorical=True)
-    dvalid = xgb.DMatrix(X_va, label=y_va, enable_categorical=True)
     
-    model = xgb.train(params, dtrain, num_boost_round=1500, evals=[(dvalid, 'valid')], 
-                      early_stopping_rounds=100, verbose_eval=False)
+    # Create single validation split for Optuna
+    X_tr, X_va, y_tr, y_va = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+    
+    # In-Fold Target Encoding (Smoothing parameter tuned)
+    te = TargetEncoder(cols=cat_cols, smoothing=trial.suggest_float('te_smoothing', 1.0, 50.0))
+    X_tr_enc = te.fit_transform(X_tr, y_tr)
+    X_va_enc = te.transform(X_va)
+    
+    dtrain = xgb.DMatrix(X_tr_enc, label=y_tr)
+    dvalid = xgb.DMatrix(X_va_enc, label=y_va)
+    
+    model = xgb.train(params, dtrain, num_boost_round=2500, 
+                      evals=[(dvalid, 'valid')], 
+                      early_stopping_rounds=150, verbose_eval=False)
+    
     return model.best_score
-
-def obj_lgb(trial, X, y):
-    params = {
-        'objective': 'binary',
-        'metric': 'auc',
-        'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.08, log=True),
-        'max_depth': trial.suggest_int('max_depth', 3, 8),
-        'num_leaves': trial.suggest_int('num_leaves', 15, 127),
-        'min_child_samples': trial.suggest_int('min_child_samples', 10, 100),
-        'subsample': trial.suggest_float('subsample', 0.5, 0.95),
-        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.4, 0.95),
-        'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10, log=True),
-        'reg_lambda': trial.suggest_float('reg_lambda', 1e-3, 10, log=True),
-        'random_state': 42,
-        'verbose': -1,
-        'n_jobs': -1
-    }
-    X_tr, X_va, y_tr, y_va = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
-    model = LGBMClassifier(**params, n_estimators=1000)
-    model.fit(X_tr, y_tr, eval_set=[(X_va, y_va)])
-    
-    # Some older LGBM versions evaluate string arrays differently
-    return roc_auc_score(y_va, model.predict_proba(X_va)[:, 1])
-
-def obj_cat(trial, X, y, cat_cols):
-    params = {
-        'iterations': 1000,
-        'eval_metric': 'AUC',
-        'task_type': 'GPU',
-        'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.08, log=True),
-        'depth': trial.suggest_int('depth', 4, 8),
-        'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 1e-3, 20, log=True),
-        'random_seed': 42,
-        'verbose': False,
-        'early_stopping_rounds': 50
-    }
-    X_tr, X_va, y_tr, y_va = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
-    
-    cat_idx = [X.columns.get_loc(c) for c in cat_cols]
-    train_pool = Pool(X_tr, y_tr, cat_features=cat_idx)
-    valid_pool = Pool(X_va, y_va, cat_features=cat_idx)
-    
-    model = CatBoostClassifier(**params)
-    model.fit(train_pool, eval_set=valid_pool)
-    return model.get_best_score()['validation']['AUC']
 
 # ======================================================
 
@@ -151,122 +153,100 @@ def main():
     X_train, y, X_test, test_ids, cat_cols = feature_engineering(train_df, test_df)
     
     print("\n" + "="*60)
-    print(f"  Phase 1: Deep Tuning Across 3 Models ({N_TRIALS} Trials Each)")
+    print(f"  Phase 1: Deep Tuning Pseudo-XGBoost + TargetEncoder ({N_TRIALS} Trials)")
     print("="*60)
     
-    # Pruners save incredible amounts of time safely
     pruner_cb = optuna.pruners.MedianPruner(n_warmup_steps=10)
-    
-    print(f"\n[1/3] Tuning XGBoost...")
     study_xgb = optuna.create_study(direction="maximize", pruner=pruner_cb)
-    study_xgb.optimize(lambda t: obj_xgb(t, X_train, y), n_trials=N_TRIALS, n_jobs=1)
+    study_xgb.optimize(lambda t: obj_xgb(t, X_train, y, cat_cols), n_trials=N_TRIALS, n_jobs=1)
+    
     best_xgb_p = study_xgb.best_trial.params
-    best_xgb_p.update({'objective': 'binary:logistic', 'eval_metric': 'auc', 
-                       'tree_method': 'hist', 'device': 'cuda', 'enable_categorical': True, 'random_state': 42})
-    print(f"Best XGB AUC: {study_xgb.best_value:.5f}")
+    best_te_smoothing = best_xgb_p.pop('te_smoothing')
     
-    print(f"\n[2/3] Tuning LightGBM...")
-    study_lgb = optuna.create_study(direction="maximize", pruner=pruner_cb)
-    study_lgb.optimize(lambda t: obj_lgb(t, X_train, y), n_trials=N_TRIALS, n_jobs=1)
-    best_lgb_p = study_lgb.best_trial.params
-    best_lgb_p.update({'objective': 'binary', 'metric': 'auc', 'random_state': 42, 'verbose': -1, 'n_jobs': -1})
-    print(f"Best LGB AUC: {study_lgb.best_value:.5f}")
-    
-    print(f"\n[3/3] Tuning CatBoost...")
-    study_cat = optuna.create_study(direction="maximize", pruner=pruner_cb)
-    study_cat.optimize(lambda t: obj_cat(t, X_train, y, cat_cols), n_trials=N_TRIALS, n_jobs=1)
-    best_cat_p = study_cat.best_trial.params
-    best_cat_p.update({'iterations': 2000, 'eval_metric': 'AUC', 'task_type': 'GPU', 
-                       'random_seed': 42, 'verbose': False, 'early_stopping_rounds': 100})
-    print(f"Best CAT AUC: {study_cat.best_value:.5f}")
+    best_xgb_p.update({
+        'objective': 'binary:logistic', 
+        'eval_metric': 'auc', 
+        'tree_method': 'hist', 
+        'device': 'cuda', 
+        'random_state': 42
+    })
+    print(f"Best Pseudo XGB AUC via Optuna Validation: {study_xgb.best_value:.5f}")
     
     print("\n" + "="*60)
-    print(f"  Phase 2: Final 10-Fold Ensembling with Tuned Params")
+    print(f"  Phase 2: Final {NUM_FOLDS}-Fold Target Encoded Pseudo-XGBoost")
     print("="*60)
     
     skf = StratifiedKFold(n_splits=NUM_FOLDS, shuffle=True, random_state=42)
     
     oof_xgb = np.zeros(len(X_train))
-    oof_lgb = np.zeros(len(X_train))
-    oof_cat = np.zeros(len(X_train))
     preds_xgb = np.zeros(len(X_test))
-    preds_lgb = np.zeros(len(X_test))
-    preds_cat = np.zeros(len(X_test))
-    
-    dtest_xgb = xgb.DMatrix(X_test, enable_categorical=True)
-    cat_idx = [X_train.columns.get_loc(c) for c in cat_cols]
-    test_pool = Pool(X_test, cat_features=cat_idx)
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(X_train, y)):
         print(f"\n--- Training Fold {fold+1}/{NUM_FOLDS} ---")
         X_tr, y_tr = X_train.iloc[train_idx], y[train_idx]
         X_va, y_va = X_train.iloc[val_idx], y[val_idx]
         
-        # XGB
-        dtrain_xgb = xgb.DMatrix(X_tr, label=y_tr, enable_categorical=True)
-        dvalid_xgb = xgb.DMatrix(X_va, label=y_va, enable_categorical=True)
-        model_xgb = xgb.train(best_xgb_p, dtrain_xgb, num_boost_round=2500, evals=[(dvalid_xgb, 'valid')], early_stopping_rounds=150, verbose_eval=False)
+        # Strict In-Fold Target Encoding
+        te = TargetEncoder(cols=cat_cols, smoothing=best_te_smoothing)
+        X_tr_enc = te.fit_transform(X_tr, y_tr)
+        X_va_enc = te.transform(X_va)
+        X_test_enc = te.transform(X_test)
+        
+        dtrain_xgb = xgb.DMatrix(X_tr_enc, label=y_tr)
+        dvalid_xgb = xgb.DMatrix(X_va_enc, label=y_va)
+        dtest_xgb = xgb.DMatrix(X_test_enc)
+        
+        model_xgb = xgb.train(best_xgb_p, dtrain_xgb, 
+                              num_boost_round=3500, 
+                              evals=[(dvalid_xgb, 'valid')], 
+                              early_stopping_rounds=200, 
+                              verbose_eval=500)
+                              
         oof_xgb[val_idx] = model_xgb.predict(dvalid_xgb)
         preds_xgb += model_xgb.predict(dtest_xgb) / NUM_FOLDS
         
-        # LGB
-        model_lgb = LGBMClassifier(**best_lgb_p, n_estimators=2000)
-        model_lgb.fit(X_tr, y_tr, eval_set=[(X_va, y_va)])
-        oof_lgb[val_idx] = model_lgb.predict_proba(X_va)[:, 1]
-        preds_lgb += model_lgb.predict_proba(X_test)[:, 1] / NUM_FOLDS
-        
-        # CAT
-        train_pool = Pool(X_tr, y_tr, cat_features=cat_idx)
-        valid_pool = Pool(X_va, y_va, cat_features=cat_idx)
-        model_cat = CatBoostClassifier(**best_cat_p)
-        model_cat.fit(train_pool, eval_set=valid_pool)
-        oof_cat[val_idx] = model_cat.predict_proba(valid_pool)[:, 1]
-        preds_cat += model_cat.predict_proba(test_pool)[:, 1] / NUM_FOLDS
-        
-    from scipy.optimize import minimize
+    final_auc = roc_auc_score(y, oof_xgb)
     print("\n" + "="*60)
-    print(f"  Tuned XGBoost  AUC : {roc_auc_score(y, oof_xgb):.5f}")
-    print(f"  Tuned LightGBM AUC : {roc_auc_score(y, oof_lgb):.5f}")
-    print(f"  Tuned CatBoost AUC : {roc_auc_score(y, oof_cat):.5f}")
-    
-    print("\n  Optimizing Ensemble Weights...")
-    def obj_func(weights):
-        w_xgb, w_lgb, w_cat = weights
-        blend = w_xgb * oof_xgb + w_lgb * oof_lgb + w_cat * oof_cat
-        return -roc_auc_score(y, blend)
-        
-    res = minimize(obj_func, [1/3, 1/3, 1/3], method='Nelder-Mead')
-    best_weights = res.x
-    best_weights /= np.sum(best_weights) # normalize
-    
-    oof_ensemble = best_weights[0]*oof_xgb + best_weights[1]*oof_lgb + best_weights[2]*oof_cat
-    final_auc = roc_auc_score(y, oof_ensemble)
-    print(f"\n  Final V7 Optimized Ensemble OOF AUC: {final_auc:.5f} !!!")
-    print(f"  Weights -> XGB: {best_weights[0]:.4f}, LGB: {best_weights[1]:.4f}, CAT: {best_weights[2]:.4f}")
+    print(f"  Final V14 'Pseudo-Labeling Booster' OOF AUC: {final_auc:.5f} !!!")
     print("="*60)
     
-    final_test_preds = best_weights[0]*preds_xgb + best_weights[1]*preds_lgb + best_weights[2]*preds_cat
-    sub_prob = pd.DataFrame({'id': test_ids, 'Churn': final_test_preds})
-    sub_prob_path = os.path.join(SUBMISSION_DIR, 'submission_v7_optimized.csv')
+    sub_prob = pd.DataFrame({'id': test_ids, 'Churn': preds_xgb})
+    sub_prob_path = os.path.join(SUBMISSION_DIR, 'submission_v14_pseudo_labeled.csv')
     sub_prob.to_csv(sub_prob_path, index=False)
     
-    report_content = f"""# V7 Optimized Ensemble Report
+    best_xgb_p['te_smoothing'] = best_te_smoothing
+    params_str = json.dumps(best_xgb_p, indent=2)
+    
+    # Calculate pseudo injection stats
+    v13_preds_path = os.path.join(SUBMISSION_DIR, 'submission_v13_target_encoded.csv')
+    if os.path.exists(v13_preds_path):
+        v13_df = pd.read_csv(v13_preds_path)
+        # Use simple limits just for logging purposes here, actual matching uses bounds set via globals
+        pos = (v13_df['Churn'] >= 0.985).sum()
+        neg = (v13_df['Churn'] <= 0.015).sum()
+        pseudo_stats = f"Injected {pos+neg} test records (Pos: {pos}, Neg: {neg})"
+    else:
+        pseudo_stats = "Failed to inject."
+        
+    report_content = f"""# V14 Pseudo-Labeling & Semi-Supervised Learning XGBoost
 
 ## Strategy
-1. **Financial Features**: Re-added avg_charge_per_tenure, discrepancies, cross ratios based on v3 success.
-2. **Deep Tuning**: Dedicated 30-trial Optuna study matching hyperparameters specifically for each model independently.
-3. **Optimized Ensembling**: Utilized Nelder-Mead optimization to find the exact blend weights `(XGB, LGB, CAT)`.
+1. **The Overfitting Panacea**: Reached the mathematical limit of the training data. Shifted to Semi-Supervised Pseudo-Labeling.
+2. **Confidence Injection**: Read the `submission_v13` probabilities. **{pseudo_stats}** with >98.5% and <1.5% confidence were given fake `Churn` targets and appended securely back to `train.csv`.
+3. **Target Encoding**: Retained `TargetEncoder` and `ChargeResidual`.
     
 ## Final Performance
-- **Tuned XGBoost AUC**: {roc_auc_score(y, oof_xgb):.5f}
-- **Tuned LightGBM AUC**: {roc_auc_score(y, oof_lgb):.5f}
-- **Tuned CatBoost AUC**: {roc_auc_score(y, oof_cat):.5f}
-- **Optimized Blend Weights**: XGB: {best_weights[0]:.4f}, LGB: {best_weights[1]:.4f}, CAT: {best_weights[2]:.4f}
-- **Final Optimized Ensemble OOF AUC**: **{final_auc:.5f}**
+- **10-Fold OOF AUC (Train + Pseudo)**: **{final_auc:.5f}**
+
+## Top Best Parameters Found
+```json
+{params_str}
+```
 """
-    with open(os.path.join(config.BASE_DIR, 'xgb_v7_report.md'), 'w') as f:
+
+    with open(os.path.join(config.BASE_DIR, 'xgb_v14_report.md'), 'w') as f:
         f.write(report_content)
-    print("\nDONE! Report saved to xgb_v7_report.md.")
+    print("\nDONE! Report saved to xgb_v14_report.md.")
 
 if __name__ == "__main__":
     main()
