@@ -10,6 +10,8 @@ Instead, it:
 import pandas as pd
 import numpy as np
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scipy.stats import rankdata
 
 import src.config as config
@@ -22,10 +24,9 @@ OUTPUT_PATH = os.path.join(SUBMISSIONS_DIR, 'submission_v22_power_blend.csv')
 # Misturamos modelos de base muito diferentes para maximizar o ganho geométrico.
 # --------------------------------------------------------------------------------
 BEST_SUBMISSIONS = [
-    'submission_v12_xgboost.csv',          # O seu melhor histórico cru
-    'submission_v16_catboost.csv',         # Baseline nativa super estável
-    'submission_v20_deotte_ensemble.csv',  # O ensemble ultra-complexo 3xGPU
-    'submission_v21_lightgbm_shallow.csv'  # O modelo extremante generalizado
+    'submission_v29_chris_deotte_exact.csv', # Novo Recorde Absoluto (0.91447)
+    'submission_v6_ensemble.csv',            # Seu antigo recorde purista (0.91416)
+    'submission_v23_autogluon.csv'           # A diversidade máxima de arquiteturas (AutoGluon)
 ]
 
 def power_average(submissions_list, power=2.5):
