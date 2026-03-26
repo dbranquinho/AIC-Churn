@@ -46,3 +46,6 @@ data/
 
 # Ignore Jupyter notebooks
 *.ipynb
+
+# CatBoost Logs
+catboost_info/
